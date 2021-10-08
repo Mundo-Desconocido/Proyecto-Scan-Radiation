@@ -1,0 +1,191 @@
+#include <SPI.h>
+#include <Ethernet.h>
+#include <MySQL_Connection.h>
+#include <MySQL_Cursor.h>
+
+// Variables del Contador
+unsigned long counts; //variable para los eventos de tubo Geiger
+unsigned long previousMillis; //variable para medir el tiempo
+double sievn; // micro sieverts por hora (lo normal son 0.12uSv/h)
+char siev[5];
+void impulse() { // dipanggil setiap ada sinyal FALLING di pin 2
+counts++;
+}
+#define LOG_PERIOD 300000 // milisegundos entre medidas
+
+
+// Variables para la base de datos
+byte mac_addr[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // Dirección MAC de Ethernet
+IPAddress server_addr(xxx,xxx,xxx,xxx);  // IP del servidor MySQL
+char user[] = "xxxxxxxxx";                // nombre de usuario MySQL
+char password[] = "xxxxxxxxx";           // password del usuario MySQL
+// Prepara la trama para la consulta SQL
+char BASE_SQL[] = "INSERT INTO xxxxxxxxx.xxxxxxxxx (sievert) VALUES (%s)";
+char consulta[128];
+EthernetClient client;  //Crea cliente Ethernet
+MySQL_Connection conn((Client *)&client);  //Asocia el cliente al conector MySQL 
+
+// Variables para los Semaforos
+int rojo1 = 7; // Se define el pin 3 con la palabra rojo1
+int amarillo1 = 5; // Se define el pin 4 con la palabra amarillo1
+int verde1 = 3; // Se define el pin 5 con la palabra verde1
+int rojo2 = 8; // Se define el pin 3 con la palabra rojo2
+int amarillo2 = 6; // Se define el pin 4 con la palabra amarillo2
+int verde2 = 4; // Se define el pin 5 con la palabra verde2
+int inicializa;
+
+// 2 verdes Muy Seguro
+// 1 Verde Seguro
+// 1 Amarillo Leve
+// 2 Amarillos Alto
+// 1 Rojo Muy Alto
+// 2 Rojos Peligro
+
+void setup() {
+  // Inicializa Semaforo
+//  pinMode(3, OUTPUT);
+//  pinMode(4, OUTPUT);
+//  pinMode(5, OUTPUT);
+//  pinMode(6, OUTPUT);
+//  pinMode(7, OUTPUT);
+//  pinMode(8, OUTPUT);
+for (int e = 3; e < 9; e++)
+  {
+    pinMode(e, OUTPUT);
+    digitalWrite(e, HIGH);
+    delay(100);
+  }
+  for (int e = 3; e < 9; e++)
+  {
+    digitalWrite(e, LOW);
+    delay(100);
+  }
+
+
+  // Iniciar Puerto Serie  
+  Serial.begin(9600);
+  while (!Serial); // Espera que esté libre el puerto serie
+  // Iniciar Acceso a Base de Datos
+  Ethernet.begin(mac_addr); // Inicia la conexión con el router para recibir una IP por DHCP
+  // Mensaje de Conexión OK o No OK por Serial
+  Serial.print("  IP asignada por DHCP: ");
+  Serial.println(Ethernet.localIP());  //Muestra la IP asignada a la shield Ethernet de Arduino
+  Serial.println("Conectando...");
+  delay(1000);
+
+counts = 0; // Coloca el Número de Clicks del Tuvo Geiger a cero
+//Serial.begin(9600);
+pinMode(2, INPUT); // Coloca el pin digital 2 en modo entrada
+attachInterrupt(digitalPinToInterrupt(2), impulse, FALLING); //define las interrupciones externas
+
+}
+
+void loop() {
+
+
+unsigned long currentMillis = millis();
+if (currentMillis - previousMillis > LOG_PERIOD) {
+  previousMillis = currentMillis;
+  sievn= (counts*0.000105)*12; //calcula los Sievert para las muestras recogidas durante 5 minutos
+  
+  accesoDB();
+  // Escribe el dato en SQL
+  MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);    // Inicializa el cursor para la consulta SQL
+  // sprintf(consulta,BASE_SQL,"'sievert'",siev);     // Completa la trama de la consulta SQL
+  dtostrf(sievn, 5, 4, siev);                         // Convierte double a chat con 4 decimales
+  Serial.print(siev);
+  Serial.println(" uSv/h");
+  semaforo(sievn);
+  
+  sprintf(consulta,BASE_SQL,siev);                    // Completa la trama de la consulta SQL
+  cur_mem->execute(consulta);                         // Ejecuta la consulta SQL y escribe el valor de los microsegundos
+  delete cur_mem;                                     // Al no haber resultados, elimina el cursor y libera memoria
+  counts = 0;
+  }
+}
+void accesoDB() 
+  {  
+    delay(100);
+    if (conn.connected()) {
+      // Si ha conectado ok y si no ha conectado reintenta
+    } else {
+      conn.close();
+      Serial.println("Connecting...");
+      digitalWrite(verde1, LOW);
+      digitalWrite(verde2, LOW);
+      digitalWrite(amarillo1, LOW);
+      digitalWrite(amarillo2, LOW);
+      digitalWrite(rojo1, LOW);
+      digitalWrite(rojo2, LOW);
+      if (conn.connect(server_addr, 3306, user, password)) {
+        
+        //delay(500);
+        Serial.println("Successful reconnect!");
+      } else {
+        
+        Serial.println("Cannot reconnect! Drat.");
+            // Pone todos los pines a cero
+        
+      }
+    }
+  }
+
+ void semaforo(double medida)
+  {
+    // Pone todos los pines a cero
+    digitalWrite(verde1, LOW);
+    digitalWrite(verde2, LOW);
+    digitalWrite(amarillo1, LOW);
+    digitalWrite(amarillo2, LOW);
+    digitalWrite(rojo1, LOW);
+    digitalWrite(rojo2, LOW);
+    if (medida<=0.09)
+      {
+        // enciende el verde1 y verde2
+        digitalWrite(verde1, HIGH);
+        digitalWrite(verde2, HIGH);
+      }
+      else if (medida>0.09 && medida<=0.25)
+      {
+        // enciende el verde1
+        digitalWrite(verde1, HIGH);
+      }
+      else if (medida>0.25 && medida<=0.5)
+      {
+        // enciende el amarillo1
+        digitalWrite(amarillo1, HIGH);
+      }
+      else if (medida>0.5 && medida<=1)
+      {
+        // enciende el amarillo1 y amarillo2
+        digitalWrite(amarillo1, HIGH);
+        digitalWrite(amarillo2, HIGH);
+      }
+      else if (medida>1 && medida<=5)
+      {
+        // enciende el rojo1
+        digitalWrite(rojo1, HIGH);
+      }
+      else if (medida>5 && medida<=10)
+      {
+        // enciende el rojo1 y Rojo2
+        digitalWrite(rojo1, HIGH);
+        digitalWrite(rojo2, HIGH);
+      }
+      else
+      {
+        // enciende Todos amarillos y rojos
+        digitalWrite(rojo1, HIGH);
+        digitalWrite(rojo2, HIGH);
+        digitalWrite(amarillo1, HIGH);
+        digitalWrite(amarillo2, HIGH);
+      }
+// 2 verdes Muy Seguro
+// 1 Verde Seguro
+// 1 Amarillo Leve
+// 2 Amarillos Alto
+// 1 Rojo Muy Alto
+// 2 Rojos Peligro
+// 3 rojos y amarillos Alto Peligro
+  }
+  
